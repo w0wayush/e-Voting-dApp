@@ -1,0 +1,5 @@
+cat .gitignore
+contracts/.placeholder
+test/.placeholder
+build
+node_modules
