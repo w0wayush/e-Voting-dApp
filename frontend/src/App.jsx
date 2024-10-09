@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import Web3 from "web3";
 import detectEthereumProvider from "@metamask/detect-provider";
-import ElectionContract from "./contracts/Election.json"; // ABI JSON
+// import ElectionContract from "./contracts/Election.json"; // ABI JSON
 
 function App() {
   const [account, setAccount] = useState("");
