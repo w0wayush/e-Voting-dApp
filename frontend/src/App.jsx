@@ -1,84 +1,179 @@
-import React, { useState, useEffect } from "react";
-import Web3 from "web3";
-import detectEthereumProvider from "@metamask/detect-provider";
-// import ElectionContract from "./contracts/Election.json"; // ABI JSON
+import { useState, useEffect } from "react";
+import { ethers } from "ethers";
+import { contractAbi, contractAddress } from "./Constant/constant";
+import Login from "./Components/Login";
+import Finished from "./Components/Finished";
+import Connected from "./Components/Connected";
+import "./App.css";
 
 function App() {
-  const [account, setAccount] = useState("");
-  const [contract, setContract] = useState(null);
+  const [provider, setProvider] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [votingStatus, setVotingStatus] = useState(true);
+  const [remainingTime, setRemainingTime] = useState("");
   const [candidates, setCandidates] = useState([]);
+  const [selectedCandidate, setSelectedCandidate] = useState("");
   const [hasVoted, setHasVoted] = useState(false);
-  const [voterRegistered, setVoterRegistered] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [votingEnded, setVotingEnded] = useState(false);
 
   useEffect(() => {
-    loadBlockchainData();
-  }, []);
+    if (isConnected) {
+      getCandidates();
+      getRemainingTime();
+      getCurrentStatus();
+      checkIfVoted();
+    }
 
-  async function loadBlockchainData() {
-    const provider = await detectEthereumProvider(); // Detect if MetaMask is installed
-    if (provider) {
-      const web3 = new Web3(provider); // Instantiate Web3 with MetaMask provider
+    if (window.ethereum) {
+      window.ethereum.on("accountsChanged", handleAccountsChanged);
+    }
 
-      // Load account details from MetaMask
-      const accounts = await web3.eth.getAccounts();
-      setAccount(accounts[0]);
-
-      // Get the current network ID (e.g., 5777 for Ganache local blockchain)
-      const networkId = await web3.eth.net.getId();
-      const deployedNetwork = ElectionContract.networks[networkId];
-
-      if (deployedNetwork) {
-        const electionInstance = new web3.eth.Contract(
-          ElectionContract.abi,
-          deployedNetwork.address
+    return () => {
+      if (window.ethereum) {
+        window.ethereum.removeListener(
+          "accountsChanged",
+          handleAccountsChanged
         );
-        setContract(electionInstance);
-
-        // Get the number of candidates in the election
-        const candidatesCount = await electionInstance.methods
-          .candidatesCount()
-          .call();
-        const candidatesArray = [];
-        for (let i = 1; i <= candidatesCount; i++) {
-          const candidate = await electionInstance.methods.candidates(i).call();
-          candidatesArray.push(candidate);
-        }
-        setCandidates(candidatesArray);
-
-        // Check if the current account has voted
-        const voterInfo = await electionInstance.methods
-          .voters(accounts[0])
-          .call();
-        setHasVoted(voterInfo.hasVoted);
-        setVoterRegistered(voterInfo.isRegistered);
-      } else {
-        alert("Smart contract not deployed on the current network.");
       }
+    };
+  }, [isConnected, account]);
+
+  async function vote() {
+    if (!selectedCandidate) return;
+    setLoading(true);
+    try {
+      const signer = provider.getSigner();
+      const contractInstance = new ethers.Contract(
+        contractAddress,
+        contractAbi,
+        signer
+      );
+      const tx = await contractInstance.vote(selectedCandidate);
+      await tx.wait();
+      setHasVoted(true);
+      await getCandidates();
+    } catch (error) {
+      console.error("Voting failed", error);
+    }
+    setLoading(false);
+  }
+
+  async function checkIfVoted() {
+    if (!account || !provider) return;
+    const signer = provider.getSigner();
+    const contractInstance = new ethers.Contract(
+      contractAddress,
+      contractAbi,
+      signer
+    );
+    const voteStatus = await contractInstance.voters(account);
+    setHasVoted(voteStatus);
+  }
+
+  async function getCandidates() {
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    const signer = provider.getSigner();
+    const contractInstance = new ethers.Contract(
+      contractAddress,
+      contractAbi,
+      signer
+    );
+    const candidatesList = await contractInstance.getAllVotesOfCandidates();
+    const formattedCandidates = candidatesList.map((candidate, index) => {
+      return {
+        index: index,
+        name: candidate.name,
+        voteCount: candidate.voteCount.toNumber(),
+      };
+    });
+    setCandidates(formattedCandidates);
+  }
+
+  async function getCurrentStatus() {
+    const signer = provider.getSigner();
+    const contractInstance = new ethers.Contract(
+      contractAddress,
+      contractAbi,
+      signer
+    );
+    const status = await contractInstance.getVotingStatus();
+    setVotingStatus(status);
+  }
+
+  async function getRemainingTime() {
+    const signer = provider.getSigner();
+    const contractInstance = new ethers.Contract(
+      contractAddress,
+      contractAbi,
+      signer
+    );
+    const time = await contractInstance.getRemainingTime();
+    const remainingTimeInSeconds = parseInt(time, 16);
+    setRemainingTime(remainingTimeInSeconds);
+    setVotingEnded(remainingTimeInSeconds <= 0);
+  }
+
+  function handleAccountsChanged(accounts) {
+    if (accounts.length > 0 && account !== accounts[0]) {
+      setAccount(accounts[0]);
+      setHasVoted(false);
+      checkIfVoted();
     } else {
-      alert("Please install MetaMask to use this dApp!");
+      setIsConnected(false);
+      setAccount(null);
     }
   }
 
-  return (
-    <div>
-      <h1>Blockchain-based eVoting System</h1>
-      <p>Connected Account: {account}</p>
+  async function connectToMetamask() {
+    if (typeof window.ethereum !== "undefined") {
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        setProvider(provider);
+        await provider.send("eth_requestAccounts", []);
+        const signer = await provider.getSigner();
+        const address = await signer.getAddress();
+        setAccount(address);
+        setIsConnected(true);
+        console.log("Metamask Connected : " + address);
+      } catch (err) {
+        console.error("Connection to Metamask failed:", err);
+      }
+    } else {
+      console.error("Metamask is not detected in the browser");
+      alert("Please install Metamask to use this app!");
+    }
+  }
 
-      {voterRegistered ? (
-        hasVoted ? (
-          <p>You have already voted!</p>
+  function handleCandidateChange(e) {
+    setSelectedCandidate(e.target.value);
+  }
+
+  console.log("Voting ended:", votingEnded);
+  console.log("Is connected:", isConnected);
+  console.log("Remaining time:", remainingTime);
+
+  return (
+    <div className="App">
+      {!votingEnded ? (
+        isConnected ? (
+          <Connected
+            account={account}
+            candidates={candidates}
+            remainingTime={remainingTime}
+            selectedCandidate={selectedCandidate}
+            handleCandidateChange={handleCandidateChange}
+            voteFunction={vote}
+            hasVoted={hasVoted}
+            loading={loading}
+          />
         ) : (
-          <div>
-            <h2>Vote for a Candidate:</h2>
-            {candidates.map((candidate) => (
-              <button key={candidate.id} onClick={() => vote(candidate.id)}>
-                {candidate.name}
-              </button>
-            ))}
-          </div>
+          <Login connectWallet={connectToMetamask} />
         )
       ) : (
-        <p>Register as a voter to participate.</p>
+        <Finished candidates={candidates} />
       )}
     </div>
   );
